@@ -3,7 +3,7 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.0
 // @description  hat selection via the '?h' chat command, stored using invisible unicode characters in the nickname; the hat is drawn above the character only for users of this script
-// @author       ClxSan & ApyGou
+// @author       ClxSan & Apygou
 // @match        https://agmaclone.xyz/*
 // @icon         https://i.pinimg.com/1200x/15/2d/2f/152d2fceae6315a8e453fc659e3c5e31.jpg
 // @run-at       document-idle
