@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         AgmaClone Wearables
+// @name         AgmaClone Wearables & Animations
 // @namespace    http://tampermonkey.net/
 // @version      1.0
 // @description  hat selection via the '?h' chat command, stored using invisible unicode characters in the nickname; the hat is drawn above the character only for users of this script
@@ -46,7 +46,9 @@
         { code: 'catEars',    name: 'Cat Ears',        img: 'https://agma.io/wearables/62.png', verticalOffset: 0.785 },
         { code: 'adminBadge', name: 'Admin Badge',     img: 'https://agma.io/wearables/56.png', verticalOffset: 0.4 },
         { code: 'rabbitEars', name: 'Rabbit Ears',     img: 'https://i.imgur.com/x701cEM.png', sizeMultiplier: 6 },
-        { code: 'adminCrown', name: 'admin Crown',     img: 'https://agma.io/wearables/45.png', verticalOffset: 0.785 },
+        { code: 'adminCrown', name: 'Admin Crown',     img: 'https://agma.io/wearables/45.png', verticalOffset: 0.785 },
+        { code: 'witchHat',   name: 'Witch Hat',       img: 'https://agma.io/wearables/46.png', verticalOffset: 0.785 },
+        { code: 'blackfridayCrown', name: 'Black Friday Crown', img:'https://agma.io/wearables/49.png', verticalOffset: 0.785},
     ];
 
     // предзагрузка картинок шапок
@@ -61,35 +63,63 @@
     }
     hatsList.forEach(h => { if (h.img) getHatImage(h.img); });
 
-    const invisIds = [8203, 8204, 8205, 8288, 65279, 847, 6068, 6069, 8192, 8193, 8194, 8195, 8196];
+    const tagCodeChars = [8203, 8204, 8205, 847, 6068, 6069, 8192, 8193, 8194, 8195, 8196];
     const HAT_TAG_MARKER = String.fromCharCode(65279); // zero-width no-break space, маркер начала тега
+    const ANIM_TAG_MARKER = String.fromCharCode(8288);
 
-    function encodeHatTag(hatIndex) {
-        if (!hatIndex || hatIndex <= 0 || hatIndex >= hatsList.length) return '';
-        const base = invisIds.length;
-        const d1 = Math.floor(hatIndex / base);
-        const d2 = hatIndex % base;
-        return HAT_TAG_MARKER + String.fromCharCode(invisIds[d1] ?? invisIds[0]) + String.fromCharCode(invisIds[d2]);
+    function encodeTagValue(value) {
+        const base = tagCodeChars.length;
+        const d1 = Math.floor(value / base);
+        const d2 = value % base;
+        return String.fromCharCode(tagCodeChars[d1]) + String.fromCharCode(tagCodeChars[d2]);
     }
 
-    function decodeHatTag(nick) {
+    function decodeTagValue(nick, marker) {
         if (!nick) return 0;
-        const pos = nick.indexOf(HAT_TAG_MARKER);
+        const pos = nick.indexOf(marker);
         if (pos === -1) return 0;
         const c1 = nick.charCodeAt(pos + 1);
         const c2 = nick.charCodeAt(pos + 2);
-        const i1 = invisIds.indexOf(c1);
-        const i2 = invisIds.indexOf(c2);
+        const i1 = tagCodeChars.indexOf(c1);
+        const i2 = tagCodeChars.indexOf(c2);
         if (i1 === -1 || i2 === -1) return 0;
-        const base = invisIds.length;
-        const index = i1 * base + i2;
+        return i1 * tagCodeChars.length + i2;
+    }
+
+    function encodeHatTag(hatIndex) {
+        if (!hatIndex || hatIndex <= 0 || hatIndex >= hatsList.length) return '';
+        return HAT_TAG_MARKER + encodeTagValue(hatIndex);
+    }
+
+    function decodeHatTag(nick) {
+        const index = decodeTagValue(nick, HAT_TAG_MARKER);
         return index > 0 && index < hatsList.length ? index : 0;
+    }
+
+    function encodeAnimTag(animIndex) {
+        if (!animIndex || animIndex <= 0) return '';
+        return ANIM_TAG_MARKER + encodeTagValue(animIndex);
+    }
+
+    function decodeAnimTag(nick) {
+        const index = decodeTagValue(nick, ANIM_TAG_MARKER);
+        return index > 0 ? index : 0;
     }
 
     function stripHatTag(nick) {
         if (!nick) return nick;
         const pos = nick.indexOf(HAT_TAG_MARKER);
         return pos === -1 ? nick : nick.slice(0, pos) + nick.slice(pos + 3);
+    }
+
+    function stripAnimTag(nick) {
+        if (!nick) return nick;
+        const pos = nick.indexOf(ANIM_TAG_MARKER);
+        return pos === -1 ? nick : nick.slice(0, pos) + nick.slice(pos + 3);
+    }
+
+    function stripAllTags(nick) {
+        return stripHatTag(stripAnimTag(nick));
     }
 
     // ждём когда нам будет все доступно
@@ -106,14 +136,53 @@
       // логика скрипта
     function initHatSystem() {
         let selectedHatIndex = store.get('hat_selected_index', 0);
+        let activeAnimIndex = 0;
+        let activeAnimTimeout = null;
+        let lastName = 0;
 
         const _useNickname = unsafeWindow.useNickname;
         unsafeWindow.useNickname = function (s) {
+            lastName = Date.now();
             s = s || localStorage.getItem('nick') || '';
-            s = stripHatTag(s) + encodeHatTag(selectedHatIndex);
+            if (s.length > 17) showToast(`Your nickname is too long to use a hat (${s.length}/17).`, "red", 4000);
+            s = stripAllTags(s) + encodeHatTag(selectedHatIndex);
+            if (activeAnimIndex > 0) {
+                if (s.length > 17) showToast(`Your nickname is too long to use an animation (${s.length}/17).`, "red", 4000);
+                s += encodeAnimTag(activeAnimIndex);
+            }
             return _useNickname.call(this, s);
         };
 
+        function setActiveAnimation(animCode) {
+            const timeSinceLastName = Date.now() - lastName;
+            if (timeSinceLastName < 5000) {
+                const waitSeconds = Math.ceil((5000 - timeSinceLastName) / 1000);
+                showToast(`Wait ${waitSeconds} second${waitSeconds === 1 ? '' : 's'} before using another animation`, 'red', 4000);
+                return;
+            }
+            if (!animCode) {
+                activeAnimIndex = 0;
+                if (activeAnimTimeout) {
+                    clearTimeout(activeAnimTimeout);
+                    activeAnimTimeout = null;
+                }
+                try { unsafeWindow.useNickname(); } catch (e) {}
+                return;
+            }
+            const idx = animationOrder.indexOf(animCode.toLowerCase());
+            if (idx === -1) return;
+            showToast(`Animation started: <b>${animCode.toLowerCase()}</b>`, '#12ce12', 1000);
+            activeAnimIndex = idx + 1;
+            if (activeAnimTimeout) {
+                clearTimeout(activeAnimTimeout);
+            }
+            activeAnimTimeout = setTimeout(() => {
+                activeAnimIndex = 0;
+                activeAnimTimeout = null;
+                try { unsafeWindow.useNickname(); } catch (e) {}
+            }, 5000);
+            try { unsafeWindow.useNickname(); } catch (e) {}
+        }
 
         function showToast(msg, color = '#a3a3a3', duration = 6000) {
             const $ = unsafeWindow.jQuery || unsafeWindow.$;
@@ -139,17 +208,17 @@
         }
 
         setTimeout(() => {
-        showToast('Welcome! Type <b>?h</b> in chat', '#8b00ff', 7000);
+        showToast('Welcome! Type <b>?h</b> or <b>wacky</b>/<b>wave</b> in chat', '#8b00ff', 7000);
          }, 1500);
 
         // обработка команды ?h [номер|код]
         function handleHatCommand(param) {
             if (!param) {
                 const list = hatsList
-                    .map((h, i) => (i === 0 ? null : `${i}: ${h.name}`))
-                    .filter(Boolean)
-                    .join(', ');
-                showToast(`Command ?h [number] - choose a hat, ?h0 - remove hat (also ?h name or ?hname - selects hat by its code name instead of a number)<br>${list}<br> Script in beta testing (Made by ClxSan & ApyGou)`, '#8b00ff', 9000);
+                .map((h, i) => (i === 0 ? null : `${i}: ${h.name}`))
+                .filter(Boolean)
+                .join(', ');
+                showToast(`Command ?h [number] - choose a hat, ?h0 - remove hat (also ?h name or ?hname - selects hat by its code name instead of a number)<br>Animations you can use: ${animationOrder}. Just type it in the chat and the animation will play<br>${list}<br> Script in beta testing (Made by ClxSan & ApyGou)`, '#8b00ff', 9000);
                 return;
             }
             let idx = -1;
@@ -158,7 +227,7 @@
             } else {
                 idx = hatsList.findIndex(h => h.code.toLowerCase() === param.toLowerCase());
             }
-        if (idx < 0 || idx >= hatsList.length) {
+            if (idx < 0 || idx >= hatsList.length) {
                 showToast('Invalid hat. Type "?h" to see the list', 'red', 5000);
                 return;
             }
@@ -166,8 +235,8 @@
             store.set('hat_selected_index', idx);
             showToast(
                 idx === 0
-                    ? 'Hat removed.'
-                    : `Hat selected: <b>${hatsList[idx].name}</b>. Respawn to apply(beta test)`,
+                ? 'Hat removed.'
+                : `Hat selected: <b>${hatsList[idx].name}</b>. Respawn to apply (beta test)`,
                 '#12ce12',
                 5000
             );
@@ -180,13 +249,24 @@
             if (e.keyCode !== 13) return;
             const chatBox = document.getElementById('chat_textbox');
             if (!chatBox || document.activeElement !== chatBox) return;
-            const match = chatBox.value.trim().match(/^\?h(?:\s*(\S+))?$/i);
-            if (!match) return;
-            e.preventDefault();
-            e.stopImmediatePropagation();
-            handleHatCommand(match[1]);
-            chatBox.value = '';
-            chatBox.blur();
+            const value = chatBox.value.trim();
+            let match = value.match(/^\?h(?:\s*(\S+))?$/i);
+            if (match) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                handleHatCommand(match[1]);
+                chatBox.value = '';
+                chatBox.blur();
+                return;
+            }
+            let animCommand = value.split(" ");
+            if (animationOrder.includes(animCommand[0].toLowerCase())) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                setActiveAnimation(animCommand[0].toLowerCase());
+                chatBox.value = '';
+                chatBox.blur();
+            }
         }, true);
 
         const nicknameCanvasMap = new WeakMap();
@@ -201,6 +281,107 @@
         setInterval(refreshNicknameCanvasMap, 1000);
         refreshNicknameCanvasMap();
 
+        const animations = {
+            wacky: {
+                image: getHatImage("https://agma.io/img/animations/wacky2.png"),
+                frames: 20,
+                columns: 5,
+                frameDuration: 2.4,
+                loops: 2.75,
+                scale: 1.1,
+                xOffset: 0,
+                yOffset: 0,
+                alpha: 0.9,
+                bubbleAlpha: 0.7
+            },
+            wave: {
+                image: getHatImage("https://agma.io/img/animations/wave.png"),
+                frames: 4,
+                columns: 4,
+                frameDuration: 5,
+                loops: 8,
+                scale: 1.25,
+                xOffset: 25,
+                yOffset: -24,
+                alpha: 0.9,
+                bubbleAlpha: 0.7
+            },
+            eatman: {
+                image: getHatImage("https://agma.io/img/animations/eatman.png"),
+                frames: 12,
+                columns: 5,
+                frameDuration: 3,
+                loops: 3,
+                scale: 1,
+                xOffset: 0,
+                yOffset: 0,
+                alpha: 1,
+                bubbleAlpha: 0.7
+             },
+            heart: {
+                 image: getHatImage("https://agma.io/img/animations/heartsv.png"),
+                 frames: 44,
+                 columns: 5,
+                 frameDuration: 3,
+                 loops: 2,
+                 scale: 1.2,
+                 xOffset: 0,
+                 yOffset: 0,
+                 alpha: 1,
+                 bubbleAlpha: 0.7
+             },
+            trophy:{
+                image: getHatImage("https://agma.io/img/animations/trophy.png"),
+                frames: 33,
+                columns: 5,
+                frameDuration: 3,
+                loops: 2,
+                scale: 1.7,
+                xOffset: 0,
+                yOffset: 0,
+                alpha: 1,
+                bubbleAlpha: 0.7
+            }
+        };
+        const animationOrder = Object.keys(animations);
+
+        function drawAnimation(ctx, anim, x, y, startTime, size) {
+            if (!anim.image?.complete) return false;
+
+            const elapsedMs = performance.now() - startTime;
+            const frameDurationMs = anim.frameDuration * (1000 / 60);
+            const frameIndex = Math.floor(elapsedMs / frameDurationMs);
+            const totalFrames = Math.floor(anim.frames * anim.loops);
+
+            if (anim.loops > 0 && frameIndex >= totalFrames) return false;
+
+            const activeFrame = frameIndex % anim.frames;
+            const frameWidth = anim.image.width / anim.columns;
+            const rows = Math.ceil(anim.frames / anim.columns);
+            const frameHeight = anim.image.height / rows;
+            const scale = (2 * anim.scale * size) / Math.max(frameWidth, frameHeight);
+            const drawWidth = frameWidth * scale;
+            const drawHeight = frameHeight * scale;
+
+            ctx.save();
+            ctx.globalAlpha = anim.alpha;
+            ctx.drawImage(
+                anim.image,
+                (activeFrame % anim.columns) * frameWidth,
+                Math.floor(activeFrame / anim.columns) * frameHeight,
+                frameWidth,
+                frameHeight,
+                x - drawWidth / 2 + anim.xOffset * scale,
+                y - drawHeight / 2 + anim.yOffset * scale,
+                drawWidth,
+                drawHeight
+            );
+            ctx.restore();
+            return true;
+        }
+
+        const animationState = new Map();
+
         const _drawImage = CanvasRenderingContext2D.prototype.drawImage;
         CanvasRenderingContext2D.prototype.drawImage = function () {
             const result = _drawImage.apply(this, arguments);
@@ -208,13 +389,31 @@
             if (img instanceof HTMLCanvasElement && nicknameCanvasMap.has(img)) {
                 const pid = nicknameCanvasMap.get(img);
                 const player = unsafeWindow.players[pid];
+                const animIndex = player ? decodeAnimTag(player.nickname) : 0;
+                const animCode = animationOrder[animIndex - 1];
+                // arguments: (image, dx, dy, dw, dh)
+                const dx = arguments[1], dy = arguments[2], dw = arguments[3], dh = arguments[4];
+                if (animCode && animations[animCode]) {
+                    let state = animationState.get(pid);
+                    if (!state || state.animCode !== animCode) {
+                        state = { animCode, startTime: performance.now(), done: false };
+                        animationState.set(pid, state);
+                    }
+                    if (!state.done) {
+                        const anim = animations[animCode];
+                        const drawn = drawAnimation(this, anim, dx + dw / 2, dy + dh / 2, state.startTime, dh * 2.46);
+                        if (!drawn) {
+                            state.done = true;
+                        }
+                    }
+                } else {
+                    animationState.delete(pid);
+                }
                 const hatIdx = player ? decodeHatTag(player.nickname) : 0;
                 if (hatIdx > 0) {
                     const hatDef = hatsList[hatIdx];
                     const hatImg = hatDef.img ? getHatImage(hatDef.img) : null;
                     if (hatImg && hatImg.complete && hatImg.naturalWidth > 0) {
-                        // arguments: (image, dx, dy, dw, dh)
-                        const dx = arguments[1], dy = arguments[2], dw = arguments[3], dh = arguments[4];
                         const sizeMultiplier = hatDef.sizeMultiplier || 7;
                         const verticalOffset = hatDef.verticalOffset || 1.09;
                         const hatW = dh * sizeMultiplier;
